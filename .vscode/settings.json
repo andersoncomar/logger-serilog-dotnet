@@ -1,0 +1,4 @@
+{
+  "dotnet.defaultSolution": "Logger.sln",
+  "cSpell.words": ["Serilog"]
+}

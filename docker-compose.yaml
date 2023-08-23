@@ -1,0 +1,13 @@
+version: "3.8"
+
+services:
+  mongodb-local:
+    container_name: mongodb-local
+    image: docker.io/bitnami/mongodb:6.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - /home/andersoncomar/docker-volumes/mongodb:/bitnami/mongodb
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
+      - EXTERNAL_PORT=27017
