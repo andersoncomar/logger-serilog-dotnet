@@ -10,6 +10,9 @@ using Serilog.Formatting.Compact;
 using Serilog.Extensions.Hosting;
 using Serilog.Exceptions;
 using Serilog.Formatting.Json;
+using Elastic.Apm.NetCoreAll;
+using Elastic.Apm.SerilogEnricher;
+using Serilog.Sinks.Elasticsearch;
 
 namespace Logger.Provider
 {
@@ -57,6 +60,8 @@ namespace Logger.Provider
     public static WebApplicationBuilder LoggerBuilder(this WebApplicationBuilder builder)
     {
       builder.Host.UseSerilog();
+
+      builder.Host.UseAllElasticApm();
 
       Serilog.Debugging.SelfLog.Enable(msg => Debug.WriteLine(msg));
       Serilog.Debugging.SelfLog.Enable(Console.Error);
@@ -116,8 +121,8 @@ namespace Logger.Provider
 
     private static ReloadableLogger Configuration(ConfigurationManager configuration)
     {
-      // const string logTemplateConsole = @"[{Timestamp} {SourceContext} {Level:u4}] {Message:lj} {NewLine}{Exception} {Properties:j}";
       const string logTemplateConsole = @"[{Timestamp} {SourceContext} {Level:u4}] {Message:lj} {NewLine}{Exception}";
+      const string logTemplateElasticSearch = @"[{ElasticApmTraceId} {ElasticApmTransactionId} {ElasticApmSpanId} {Message:lj} {NewLine}{Exception}";
 
       _loggerSettings = configuration.GetSection(LoggerSettings.AppSettingName).Get<LoggerSettings>() ?? new LoggerSettings();
 
@@ -130,13 +135,14 @@ namespace Logger.Provider
         .Enrich.WithExceptionDetails()
         .Enrich.WithMachineName();
 
-      if (_loggerSettings.Console.Active)
-      {
-        loggerConfig.WriteTo.Console(outputTemplate: logTemplateConsole);
-      }
 
       try
       {
+        if (_loggerSettings.Console.Active && !_loggerSettings.ElasticSearch.Active)
+        {
+          loggerConfig.WriteTo.Console(outputTemplate: logTemplateConsole);
+        }
+
         if (_loggerSettings.File.Active)
         {
           loggerConfig.WriteTo.File(new JsonFormatter(), _loggerSettings.File.Path, rollingInterval: RollingInterval.Day);
@@ -145,6 +151,20 @@ namespace Logger.Provider
         if (_loggerSettings.Filebeat.Active)
         {
           loggerConfig.WriteTo.File(new JsonFormatter(), _loggerSettings.Filebeat.Path, rollingInterval: RollingInterval.Day);
+        }
+
+        if (_loggerSettings.ElasticSearch.Active)
+        {
+          loggerConfig.Enrich.WithElasticApmCorrelationInfo();
+          loggerConfig.WriteTo.Console(outputTemplate: logTemplateElasticSearch);
+          loggerConfig.WriteTo.Elasticsearch(new ElasticsearchSinkOptions(new Uri(_loggerSettings.ElasticSearch.Uri))
+          {
+            DetectElasticsearchVersion = false,
+            AutoRegisterTemplate = true,
+            AutoRegisterTemplateVersion = AutoRegisterTemplateVersion.ESv7,
+            ModifyConnectionSettings = configuration => configuration.ServerCertificateValidationCallback(
+                        (o, certificate, arg3, arg4) => { return true; })
+          });
         }
 
         if (_loggerSettings.Database.Active)
