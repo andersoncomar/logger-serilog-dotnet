@@ -6,7 +6,7 @@ namespace Logger.Provider.ValueObjects
   {
     public static string AppSettingName = "BaseSettings";
 
-    public bool ShowHeader { get; private set; } = false;
+    public bool ShowHeader { get; set; } = false;
 
     public override string ToString()
     {

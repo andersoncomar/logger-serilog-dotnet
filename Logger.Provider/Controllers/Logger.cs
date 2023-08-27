@@ -1,24 +1,22 @@
 using System.Diagnostics;
 using Serilog;
-using Serilog.Events;
 using System.Text;
 using Logger.Provider.Middlewares;
 using Microsoft.AspNetCore.Builder;
 using Logger.Provider.ValueObjects;
 using Microsoft.Extensions.Configuration;
-using Serilog.Formatting.Compact;
 using Serilog.Extensions.Hosting;
-using Serilog.Exceptions;
-using Serilog.Formatting.Json;
 using Elastic.Apm.NetCoreAll;
-using Elastic.Apm.SerilogEnricher;
-using Serilog.Sinks.Elasticsearch;
+using Logger.Provider.Shared.Extensions;
+using Logger.Provider.Shared.Helpers;
+using Logger.Provider.Shared;
+using Microsoft.Extensions.DependencyInjection;
+using Logger.Provider.Factory;
 
 namespace Logger.Provider
 {
   public static class LoggerProvider
   {
-    private static LoggerSettings _loggerSettings = new LoggerSettings();
     private static Exception? _configurationException = null;
 
     #region Methods Log
@@ -59,20 +57,25 @@ namespace Logger.Provider
 
     public static WebApplicationBuilder LoggerBuilder(this WebApplicationBuilder builder)
     {
+      builder.Services.AddConfiguration(builder.Configuration);
+      builder.Services.AddDependencyInjection();
+      builder.Services.CreateServiceProvider();
+
       builder.Host.UseSerilog();
 
-      builder.Host.UseAllElasticApm();
+      builder.Host.VerifyIfUseApm();
 
       Serilog.Debugging.SelfLog.Enable(msg => Debug.WriteLine(msg));
       Serilog.Debugging.SelfLog.Enable(Console.Error);
 
-      Log.Logger = Configuration(builder.Configuration);
+      Log.Logger = BuilderLoggerConfiguration();
 
       Log.Information("Starting logger");
 
       if (_configurationException != null)
       {
         Log.Fatal(_configurationException, "Host terminated unexpectedly");
+        _configurationException = null;
       }
 
       return builder;
@@ -89,7 +92,7 @@ namespace Logger.Provider
                 diagnosticContext.Set("Body", String.Empty);
                 diagnosticContext.Set("Headers", String.Empty);
 
-                if (_loggerSettings.ShowHeader)
+                if (Settings.ShowHeader)
                 {
                   diagnosticContext.Set("Headers", context.Request.Headers);
                 }
@@ -119,67 +122,30 @@ namespace Logger.Provider
       return app;
     }
 
-    private static ReloadableLogger Configuration(ConfigurationManager configuration)
+    private static void VerifyIfUseApm(this ConfigureHostBuilder host)
     {
-      const string logTemplateConsole = @"[{Timestamp} {SourceContext} {Level:u4}] {Message:lj} {NewLine}{Exception}";
-      const string logTemplateElasticSearch = @"[{ElasticApmTraceId} {ElasticApmTransactionId} {ElasticApmSpanId} {Message:lj} {NewLine}{Exception}";
-
-      _loggerSettings = configuration.GetSection(LoggerSettings.AppSettingName).Get<LoggerSettings>() ?? new LoggerSettings();
-
-      var loggerConfig = new LoggerConfiguration()
-        .MinimumLevel.Debug()
-        .MinimumLevel.Override("Microsoft", LogEventLevel.Information)
-        .MinimumLevel.Override("Microsoft.AspNetCore", LogEventLevel.Warning)
-        .MinimumLevel.Override("Microsoft.AspNetCore.HttpLogging.HttpLoggingMiddleware", LogEventLevel.Information)
-        .Enrich.FromLogContext()
-        .Enrich.WithExceptionDetails()
-        .Enrich.WithMachineName();
-
-
-      try
+      if (Settings.ElasticSearch.Active)
       {
-        if (_loggerSettings.Console.Active && !_loggerSettings.ElasticSearch.Active)
-        {
-          loggerConfig.WriteTo.Console(outputTemplate: logTemplateConsole);
-        }
-
-        if (_loggerSettings.File.Active)
-        {
-          loggerConfig.WriteTo.File(new JsonFormatter(), _loggerSettings.File.Path, rollingInterval: RollingInterval.Day);
-        }
-
-        if (_loggerSettings.Filebeat.Active)
-        {
-          loggerConfig.WriteTo.File(new JsonFormatter(), _loggerSettings.Filebeat.Path, rollingInterval: RollingInterval.Day);
-        }
-
-        if (_loggerSettings.ElasticSearch.Active)
-        {
-          loggerConfig.Enrich.WithElasticApmCorrelationInfo();
-          loggerConfig.WriteTo.Console(outputTemplate: logTemplateElasticSearch);
-          loggerConfig.WriteTo.Elasticsearch(new ElasticsearchSinkOptions(new Uri(_loggerSettings.ElasticSearch.Uri))
-          {
-            DetectElasticsearchVersion = false,
-            AutoRegisterTemplate = true,
-            AutoRegisterTemplateVersion = AutoRegisterTemplateVersion.ESv7,
-            ModifyConnectionSettings = configuration => configuration.ServerCertificateValidationCallback(
-                        (o, certificate, arg3, arg4) => { return true; })
-          });
-        }
-
-        if (_loggerSettings.Database.Active)
-        {
-          loggerConfig.WriteTo.MongoDB(_loggerSettings.Database.ConnectionStrings, collectionName: "LogSerilog");
-        }
+        host.UseAllElasticApm();
       }
-      catch (Exception ex)
-      {
-        _configurationException = ex;
-      }
-
-      return loggerConfig.CreateBootstrapLogger();
     }
+
+    private static ReloadableLogger BuilderLoggerConfiguration()
+    {
+      LoggerFactory loggerFactory = ServiceManager.ServiceProvider!.GetService<LoggerFactory>()!;
+      return loggerFactory.Builder();
+
+    }
+
+    private static LoggerSettings Settings
+    {
+      get
+      {
+        return ServiceManager.ServiceProvider!.GetService<LoggerAppSettings>()!.Settings;
+      }
+    }
+
+    #endregion
   }
 
-  #endregion
 }
